@@ -1,0 +1,42 @@
+experiment_name: example.py
+dataset: 'embeddings.pt'
+hyperparameters:
+  batch_size:
+    -  64
+  bpe_vocab_size:
+    - 2000
+  vocab_offset:
+    - 1000
+  learning_rate:
+    - .01
+    - .1  
+  momentum:
+    - .98
+  loss_fn:
+    - 'xent'
+  epochs:
+    - 30
+  kernel|filter_sizes:
+    - []  
+  word_length:
+    - 18
+  fc_sizes:
+    - [768] # can define lists like so
+    -
+      - 768 # <-- or like this. ([768, 1024])
+      - 1024
+  vocab_size:
+    - 70
+  char_embedding_size:
+    -  8
+  activation:
+    -  'relu'
+  lr_step_size:
+    - 50  
+  lr_decay:
+    - 1.0
+    - .6  
+  random_seed:
+    - 345
+    - 123
+    - 234  
