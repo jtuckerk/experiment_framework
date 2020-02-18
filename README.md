@@ -72,4 +72,4 @@ hyperparameters:
     -  'relu'
 ```
 
-This uses ```Pytorch`` for saving and loading models. Eventually, the client will be framework agnostic with save and load callbacks, but this was good enough for now.
+This uses Pytorch for saving and loading models. Eventually, the client will be framework agnostic with save and load callbacks, but this was good enough for now.
