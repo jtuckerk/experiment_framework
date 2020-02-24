@@ -13,10 +13,6 @@ import time
 
 import torch
 
-logger = logging.getLogger()
-level = logging.getLevelName("INFO")
-logger.setLevel(level)
-
 HASH_SIZE = 9
 LOCK_FILE = '.lockfile'
 MAX_LOCK_ATTEMPS = 5
@@ -242,12 +238,11 @@ class ExperimentClient():
   def MoreExperiments(self):
     return self.n_experiments_left >= 1
 
-  def SaveResults(self, h, train_results, val_results):
+  def SaveResults(self, h, results):
     filename = os.path.join(RESULTS_DIR, h['experiment_hash'])
     if not os.path.exists(filename): 
       with open(filename, 'x') as f:
-        out = {'train_results': train_results,
-               'val_results': val_results,
+        out = {'results': results,
                'exp_info': h}
         f.write(dump(out))
     else:
@@ -261,6 +256,9 @@ class ExperimentClient():
       filename+='.new'
     torch.save(model.state_dict(), filename)      
     self.file_syncer.SyncMissingFiles()
+
+  def MarkIncomplete(self, h):
+    self.http_client.DeleteFile(os.path.join(STARTED_DIR, h['experiment_hash']))
     
 def _TestExperiment(hash_exp):
   for i in range(10):

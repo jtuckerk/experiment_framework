@@ -5,4 +5,4 @@ def init_dataset(exp_info):
 
 def run_one(h, dataset):
   # takes a single set of hyperparameters h and the dataset returned from init_dataset
-  return train_results, validation_results, model
+  return results, model

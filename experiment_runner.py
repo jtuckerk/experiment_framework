@@ -10,11 +10,11 @@ data.zip - any data required by the experiment
 scripts.zip - the experiment.py script and the experiment_client.py script
 """
 
+import logging
 
 import os
 import subprocess
 from subprocess import PIPE
-import logging
 from absl import flags
 from absl import app
 import torch
@@ -75,8 +75,8 @@ def RunExperiment(save_models):
     h = EC.GetExperiment()
     if h:
       try: 
-        train_results, val_results, model = run_one(h['hyperparameters'], dataset)
-        EC.SaveResults(h, train_results, val_results)
+        results, model = run_one(h['hyperparameters'], dataset)
+        EC.SaveResults(h, results)
         if save_models:
           EC.SaveModel(h, model)
         del model
@@ -84,14 +84,20 @@ def RunExperiment(save_models):
       except Exception as e:
         logging.warning('Failed to run or save exp %s due to %s\n%s' % (
           h['experiment_hash'], e, h))
+        EC.MarkIncomplete(h)
         if FLAGS.raise_on_failure:
           raise
       
 
 def main(argv):
-  logger = logging.getLogger()
+  from imp import reload
+  reload(logging)
   level = logging.getLevelName("INFO")
-  logger.setLevel(level)
+  logging.basicConfig(
+    level=level,
+    format="[%(asctime)s %(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+  )
 
   os.environ['SERVER_ADDR']=FLAGS.address
 

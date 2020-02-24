@@ -67,7 +67,7 @@ class HTTPRequestHandler(server.SimpleHTTPRequestHandler):
   def do_DELETE(self):
     if not self.MagicWord():
       return
-    filename = os.path.basename(self.path)
+    filename = self.path
 
     if os.path.exists(filename):
       os.remove(filename)
