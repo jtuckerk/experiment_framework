@@ -90,6 +90,11 @@ def RunExperiment(save_models):
         EC.MarkIncomplete(h)
         if FLAGS.raise_on_failure:
           raise
+      except KeyboardInterrupt:
+        logging.warning('Exited experiment  %s\n%s' % (
+          h['experiment_hash'], h))
+        EC.MarkIncomplete(h)
+        raise
 
 
 def main(argv):
