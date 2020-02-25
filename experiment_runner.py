@@ -30,6 +30,8 @@ flags.DEFINE_boolean('download_scripts', help='download scripts.zip from experim
                      default=True)
 flags.DEFINE_boolean('save_models', help='Save and sync all models to the experiment server.',
                      default=False)
+flags.DEFINE_boolean('dry_run', help='Run everything but perform no writes. this may repeate experiments.',
+                     default=False)
 flags.DEFINE_boolean('raise_on_failure', help='Raise the exception from a failing experiment. Otherwise try the next experiment.',
                      default=True)
 
@@ -37,7 +39,7 @@ flags.DEFINE_boolean('raise_on_failure', help='Raise the exception from a failin
 def DownloadExpSetup(download_data, download_scripts):
   if download_data:
     logging.info('downloading data from %s' % os.environ['SERVER_ADDR'])
-    
+
     ret = subprocess.run('wget -N ${SERVER_ADDR}/data.zip',
                          stderr=PIPE, env=os.environ, shell=True)
     if ret.returncode != 0:
@@ -51,7 +53,7 @@ def DownloadExpSetup(download_data, download_scripts):
     ret = subprocess.run('wget -N ${SERVER_ADDR}/scripts.zip',
                          stderr=PIPE, env=os.environ, shell=True)
     if ret.returncode != 0:
-      logging.warning(ret.stderr.decode()); 
+      logging.warning(ret.stderr.decode());
       raise Exception("Failed data download.")
     else:
       ret = subprocess.run('unzip -o scripts.zip',
@@ -62,11 +64,12 @@ def DownloadExpSetup(download_data, download_scripts):
 def RunExperiment(save_models):
   from experiment_client import ExperimentClient
   from experiment import init_dataset, run_one
-  
+
   EC = ExperimentClient(os.environ['SERVER_ADDR'],
                         dirs_to_sync=['results/', 'models/'],
-                        server_password=FLAGS.server_password)  
-  
+                        server_password=FLAGS.server_password,
+                        dry_run=FLAGS.dry_run)
+
   dataset = init_dataset(EC.config)
 
   logging.info("%s experiments in config." % len(EC.configs))
@@ -74,7 +77,7 @@ def RunExperiment(save_models):
 
     h = EC.GetExperiment()
     if h:
-      try: 
+      try:
         results, model = run_one(h['hyperparameters'], dataset)
         EC.SaveResults(h, results)
         if save_models:
@@ -87,7 +90,7 @@ def RunExperiment(save_models):
         EC.MarkIncomplete(h)
         if FLAGS.raise_on_failure:
           raise
-      
+
 
 def main(argv):
   from imp import reload
@@ -103,6 +106,6 @@ def main(argv):
 
   DownloadExpSetup(FLAGS.download_data, FLAGS.download_scripts)
   RunExperiment(FLAGS.save_models)
-    
+
 if __name__ == '__main__':
    app.run(main)

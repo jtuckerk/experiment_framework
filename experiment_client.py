@@ -33,10 +33,11 @@ Dir structure
 
 class HttpClient():
 
-  def __init__(self, address, password):
+  def __init__(self, address, password, dry_run=False):
       self.conn = http.client.HTTPConnection(address)
       self.password_headers = {'magicpass': password}
-      
+      self.dry_run=dry_run
+
   def GetFile(self, filename, overwite=False):
     assert not filename.endswith('/')
     self.conn.request("GET", filename, headers=self.password_headers)
@@ -44,13 +45,13 @@ class HttpClient():
     logging.debug("GET %s status: %s %s" % (filename, resp.status, resp.reason))
     if resp.status != 200:
       return False
-    try: 
+    try:
       with open(filename, 'wb') as f:
         f.write(resp.read())
       return True
     except Exception as e:
       logging.warning("failed to write %s, it probably already exists. %s" % (filename, e))
-    
+
   def ListDir(self, dirname):
     assert dirname.endswith('/')
     self.conn.request("GET", dirname, headers=self.password_headers)
@@ -58,7 +59,7 @@ class HttpClient():
     logging.debug("GET %s status: %s %s" % (dirname, resp.status, resp.reason))
     if resp.status != 200:
       return []
-    try: 
+    try:
       root = html.fromstring(resp.read())
       # directories end with /
       directories_and_files = root.xpath('//body//ul//li//text()')
@@ -70,7 +71,7 @@ class HttpClient():
 
   def PutFile(self, filename, overwrite=False, contents=None):
     mode = 'rb'
-    if not contents: 
+    if not contents:
       with open(filename, mode) as f:
         file_contents = f.read()
     else:
@@ -80,29 +81,28 @@ class HttpClient():
     if overwrite:
       headers['overwrite'] = 'true'
     remote_path = os.path.join('./', filename)
-    self.conn.request("PUT", remote_path, file_contents, headers=headers)
-    resp = self.conn.getresponse()
-    logging.debug("GET %s status: %s %s" % (filename, resp.status, resp.reason))
-    return resp.status == 201 or resp.status == 200
+    if not self.dry_run:
+      self.conn.request("PUT", remote_path, file_contents, headers=headers)
+      resp = self.conn.getresponse()
+      logging.debug("GET %s status: %s %s" % (filename, resp.status, resp.reason))
+    return self.dry_run or resp.status == 201 or resp.status == 200
 
   def DeleteFile(self, filename):
     assert not filename.endswith('/')
-    self.conn.request("DELETE", filename, headers=self.password_headers)
-    resp = self.conn.getresponse()
+    if not self.dry_run:
+      self.conn.request("DELETE", filename, headers=self.password_headers)
+      resp = self.conn.getresponse()
 
-    if resp.status == 200:
-      return True
-    else:
-      return False
-    
+    return self.dry_run or resp.status == 200
+
 class FileSyncer():
   def __init__(self, http_client, dirs_to_sync):
     self.http_client = http_client
 
     self.dirs_to_sync = dirs_to_sync
-        
+
   def CheckSyncStatus(self):
-    files_missing_remote = []  
+    files_missing_remote = []
     for d in self.dirs_to_sync:
       remote_files = set(self.http_client.ListDir(d))
       local_files = set(os.listdir(d))
@@ -114,16 +114,16 @@ class FileSyncer():
     for f in missing_files:
       self.http_client.PutFile(f)
       logging.info("Syncing %s" % f)
-  
-class ExperimentClient():
-  def __init__(self, address, dirs_to_sync=[], server_password="very_secure"):
-    self.holding_lock = False
 
+class ExperimentClient():
+  def __init__(self, address, dirs_to_sync=[], server_password="very_secure", dry_run=False):
+    self.holding_lock = False
+    self.dry_run=dry_run
     for d in dirs_to_sync:
       if not os.path.exists(d):
         os.makedirs(d, exist_ok=True)
-      
-    self.http_client = HttpClient(address, server_password)
+
+    self.http_client = HttpClient(address, server_password, dry_run=dry_run)
     self.file_syncer = FileSyncer(self.http_client, dirs_to_sync)
     self.file_syncer.SyncMissingFiles()
     config_file = 'config.yaml'
@@ -140,7 +140,7 @@ class ExperimentClient():
   def __del__(self):
     if self.holding_lock:
       self.ReleaseLock()
-      
+
   def StartedExperiments(self):
     return self.http_client.ListDir(STARTED_DIR)
 
@@ -152,7 +152,7 @@ class ExperimentClient():
         return True
       time.sleep(1)
     raise Exception("Failed to grab lock")
-  
+
   def ReleaseLock(self):
     assert self.http_client.DeleteFile(LOCK_FILE), "Bad State trying to release a lock file failed"
     self.holding_lock = False
@@ -163,7 +163,7 @@ class ExperimentClient():
     r_val = fn()
     self.ReleaseLock()
     return r_val
-  
+
   def LoadConfig(self, filename):
     with open(filename, 'r') as f:
       config_dict = safe_load(f.read())
@@ -212,7 +212,7 @@ class ExperimentClient():
       c['experiment_hash'] = exp_hash
       configs[exp_hash] = c
     return configs
-    
+
   def _GetExperiment(self):
     completed_experiments = self.StartedExperiments()
     all_experiments = set(self.configs.keys())
@@ -230,7 +230,7 @@ class ExperimentClient():
     logging.debug("found exp to run: %s" % next_exp)
     self.http_client.PutFile(os.path.join(STARTED_DIR, next_exp), contents=b'started')
     return next_exp
-                          
+
   def GetExperiment(self):
     exp = self.DoLocked(self._GetExperiment)
     return self.configs.get(exp, None)
@@ -240,29 +240,31 @@ class ExperimentClient():
 
   def SaveResults(self, h, results):
     filename = os.path.join(RESULTS_DIR, h['experiment_hash'])
-    if not os.path.exists(filename): 
-      with open(filename, 'x') as f:
-        out = {'results': results,
-               'exp_info': h}
-        f.write(dump(out))
+    if not os.path.exists(filename):
+      if not self.dry_run:
+        with open(filename, 'x') as f:
+          out = {'results': results,
+                 'exp_info': h}
+          f.write(dump(out))
     else:
       logging.warning("Tried overwriting existing result")
     self.file_syncer.SyncMissingFiles()
 
   def SaveModel(self, h, model):
     filename = os.path.join(MODEL_DIR, h['experiment_hash'])
-    if os.path.exists(filename): 
+    if os.path.exists(filename):
       logging.warning("saved model already exists.")
       filename+='.new'
-    torch.save(model.state_dict(), filename)      
+    if not self.dry_run:
+      torch.save(model.state_dict(), filename)
     self.file_syncer.SyncMissingFiles()
 
   def MarkIncomplete(self, h):
-    self.http_client.DeleteFile(os.path.join(STARTED_DIR, h['experiment_hash']))
-    
+    if not self.dry_run:
+      self.http_client.DeleteFile(os.path.join(STARTED_DIR, h['experiment_hash']))
+
 def _TestExperiment(hash_exp):
   for i in range(10):
     logging.warning("exp %s run %s" % (hash_exp['experiment_hash'], i ))
     time.sleep(1)
   logging.warning("exp done %s" % hash_exp)
-
