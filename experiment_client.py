@@ -10,6 +10,7 @@ import hashlib
 import os
 from lxml import html
 import time
+import numpy as np
 
 import torch
 
@@ -112,8 +113,9 @@ class FileSyncer():
   def SyncMissingFiles(self):
     missing_files = self.CheckSyncStatus()
     for f in missing_files:
+      logging.info("Syncing %s" % f)      
       self.http_client.PutFile(f)
-      logging.info("Syncing %s" % f)
+
 
 class ExperimentClient():
   def __init__(self, address, dirs_to_sync=[], server_password="very_secure", dry_run=False):
@@ -226,7 +228,9 @@ class ExperimentClient():
       logging.debug('no experiments left')
       return
 
-    next_exp = experiments_left.pop()
+    experiments_left = list(experiments_left)
+    np.random.shuffle(experiments_left)
+    next_exp = experiments_left[0]    
     logging.debug("found exp to run: %s" % next_exp)
     self.http_client.PutFile(os.path.join(STARTED_DIR, next_exp), contents=b'started')
     return next_exp

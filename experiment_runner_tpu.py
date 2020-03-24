@@ -20,6 +20,10 @@ from absl import app
 import torch
 import numpy as np
 
+# imports the torch_xla package
+import torch_xla
+import torch_xla.core.xla_model as xm
+
 FLAGS = flags.FLAGS
 flags.DEFINE_string('address', help='address ip:port of experiment manager server',
                     default='0.0.0.0:8072')
@@ -68,14 +72,16 @@ def RunExperiment(save_models):
   from experiment_client import ExperimentClient
   from experiment import init_dataset, run_one
 
+  dev = xm.xla_device()
   EC = ExperimentClient(os.environ['SERVER_ADDR'],
                         dirs_to_sync=['results/', 'models/'],
                         server_password=FLAGS.server_password,
                         dry_run=FLAGS.dry_run)
 
-  # Load dataset once for all experiments from top level configs. Or...
+  # Load dataset once for all experiments from top level configs
+  # TODO setup to load data once and set hyperparams (e.g. data aug) on each exp
   if FLAGS.consistent_dataset:
-    dataset = init_dataset(EC.config)
+    dataset = init_dataset(EC.config, dev=dev)
 
   logging.info("%s experiments in config." % len(EC.configs))
   while EC.MoreExperiments():
@@ -83,12 +89,10 @@ def RunExperiment(save_models):
     h = EC.GetExperiment()
     if h:
       try:
-        # ...Or use dataset configs with distinct hyperparams for each experiment.
-        # can add randomization/data augmentation to a single loaded dataset in run_one as well
         if not FLAGS.consistent_dataset:
-          dataset = init_dataset(h['hyperparameters'])
+          dataset = init_dataset(h['hyperparameters'], dev=dev)
 
-        results, model = run_one(h['hyperparameters'], dataset)
+        results, model = run_one(h['hyperparameters'], dataset, dev=dev)
         EC.SaveResults(h, results)
         if save_models:
           EC.SaveModel(h, model)
