@@ -19,8 +19,14 @@ from absl import flags
 from absl import app
 import torch
 import numpy as np
+from copy import deepcopy
+import importlib
+import yaml
+from collections import defaultdict
 
 FLAGS = flags.FLAGS
+flags.DEFINE_string('config', help='Config file name', default='config.yaml')
+flags.DEFINE_string('experiment', help='Experiment module name', default='experiment')
 flags.DEFINE_string('address', help='address ip:port of experiment manager server',
                     default='0.0.0.0:8072')
 flags.DEFINE_string('server_password', help='password for file server - required for write/modify',
@@ -37,6 +43,8 @@ flags.DEFINE_boolean('raise_on_failure', help='Raise the exception from a failin
                      default=True)
 flags.DEFINE_boolean('consistent_dataset', help='If true init dataset once for all experiments, else re-init for each exp.',
                      default=True)
+flags.DEFINE_boolean('eval_only', help='kludgy way to run evaluation on an already trained model.',
+                     default=False)
 
 
 def DownloadExpSetup(download_data, download_scripts):
@@ -64,18 +72,105 @@ def DownloadExpSetup(download_data, download_scripts):
       ret = subprocess.run('touch __init__.py',
                          stderr=PIPE, env=os.environ, shell=True)
 
-def RunExperiment(save_models):
-  from experiment_client import ExperimentClient
-  from experiment import init_dataset, run_one
+class Tracker():
+  def __init__(self, console_metrics, exp_info):
+    self.tracked_types = defaultdict(lambda: defaultdict(list))
+    self.tracked_types['exp_info'] = exp_info
+    self.console_metrics = console_metrics
+    self.last_logged = {}
+    for i in console_metrics:
+      self.tracked_types[i] = defaultdict(list)
 
-  EC = ExperimentClient(os.environ['SERVER_ADDR'],
-                        dirs_to_sync=['results/', 'models/'],
-                        server_password=FLAGS.server_password,
-                        dry_run=FLAGS.dry_run)
+      self.last_logged[i] = 0
+
+    self.extra = {} # column name: additional_space
+
+    self.columns = ['Log Type']
+    self.has_logged = False
+
+  def PopulateData(self, data):
+    dd_data = defaultdict(lambda: defaultdict(list), data)
+    for k,v in dd_data.items():
+      dd_data[k]=defaultdict(list, v)
+    self.tracked_types = dd_data
+
+  def AddExpInfo(self, item, value):
+    self.tracked_types['exp_info'][item]=value
+    
+  def Track(self, entry, item, value, add_space=None):
+    self.tracked_types[entry][item].append(value)
+    if add_space:
+      self.extra[item] = add_space
+
+  def _PopulateColumns(self):
+    new_columns = False
+    for t in self.console_metrics:
+      type_dict = self.tracked_types[t]
+      for metric_name in type_dict.keys():
+        if metric_name not in self.columns:
+          new_columns = True
+          self.columns.append(metric_name)
+    return new_columns
+
+  def _GetStringRep(self, val, size):
+    s=str(val)
+    s_trunc = s[:size]
+    if type(val)==float:
+      try:
+        exp_ind = s.index('e')
+        exp_str = s[exp_ind:]
+        s_trunc = s_trunc[:-len(exp_str)]+exp_str
+      except Exception:
+        pass
+    return s_trunc
+      
+
+  def _LogSingle(self, log_type, format_str):
+    values = [log_type.upper()]
+    for v in self.columns[1:]:
+      results = self.tracked_types[log_type].get(v, [""])
+      if type(results)==list:
+        val = results[-1]
+      else:
+        val = results
+      val = self._GetStringRep(val, len(v)+self.extra.get(v,0))
+      values.append(val)
+    logging.info(format_str.format(*values))
+
+  def Log(self, t):
+    new_columns = self._PopulateColumns()
+    s = ""
+    for i, c in enumerate(self.columns):
+      s +='{%d:<%d}' % (i, len(c)+2+self.extra.get(c,0))
+    if new_columns or not self.has_logged:
+      logging.info(s.format(*self.columns))
+
+    self._LogSingle(t, s)
+    self.has_logged = True
+        
+  def GetMetrics(self):
+    return {t: dict(v) for t,v in self.tracked_types.items()}
+      
+
+def Evaluate():
+  # use the hyperparameters stored in the results dir and the model checkpoint in the models dir.
+  # TODO more code organization would probably be good.
+  from experiment_client import ExperimentClient
+  # Contrived example of generating a module named as a string
+  experiment_module = FLAGS.experiment
+  experiment = importlib.import_module(experiment_module)
+
+
+  EC = ExperimentClient(
+    os.environ['SERVER_ADDR'],
+    config=FLAGS.config,
+    dirs_to_sync=['results/', 'models/'],
+    server_password=FLAGS.server_password,
+    dry_run=FLAGS.dry_run)
 
   # Load dataset once for all experiments from top level configs. Or...
   if FLAGS.consistent_dataset:
-    dataset = init_dataset(EC.config)
+    dataset = experiment.InitDataset(EC.config)
 
   logging.info("%s experiments in config." % len(EC.configs))
   while EC.MoreExperiments():
@@ -86,18 +181,85 @@ def RunExperiment(save_models):
         # ...Or use dataset configs with distinct hyperparams for each experiment.
         # can add randomization/data augmentation to a single loaded dataset in run_one as well
         if not FLAGS.consistent_dataset:
-          dataset = init_dataset(h['hyperparameters'])
+          dataset = experiment.InitDataset(h['hyperparameters'])
 
-        results, model = run_one(h['hyperparameters'], dataset)
-        EC.SaveResults(h, results)
+        ckpt = h['hyperparameters'].get('model_checkpoint', None)
+        results_file = 'results/' + ckpt.split('/')[-1]
+        loaded_results = yaml.safe_load(open(results_file).read())
+        mt = Tracker(['val'], exp_info=None)
+        mt.PopulateData(loaded_results)
+
+        # keep the hyperparams from the experiment but overwrite any hyperparams in the eval config.
+        # This right here is sommme reallll good code
+        h_load = deepcopy(mt.tracked_types['exp_info'])
+        h_load['hyperparameters'].update(h['hyperparameters'])
+        h = h_load
+        h['hyperparameters']['epochs'] = 0
+        
+        model = experiment.CreateModel(h['hyperparameters'])
+
+        if ckpt:
+          experiment.LoadCheckpoint(model, ckpt)
+        model = experiment.RunOne(h['hyperparameters'], model, dataset, mt)
+        EC.SaveResults(mt.GetMetrics(), h['experiment_hash']+".eval", overwrite=True)
+
+        experiment.CleanupExperiment(model)
+      except Exception as e:
+        logging.warning('Failed to run or save exp %s due to %s\n%s' % (
+          h['experiment_hash'], e, h))
+        EC.MarkIncomplete(h['experiment_hash'])
+        if FLAGS.raise_on_failure:
+          raise
+      except KeyboardInterrupt:
+        logging.warning('Exited experiment  %s\n%s' % (
+          h['experiment_hash'], h))
+        EC.MarkIncomplete(h)
+        raise
+  
+def RunExperiment(save_models):
+  from experiment_client import ExperimentClient
+  # Contrived example of generating a module named as a string
+  experiment_module = FLAGS.experiment
+  experiment = importlib.import_module(experiment_module)
+
+
+  EC = ExperimentClient(os.environ['SERVER_ADDR'],
+                        dirs_to_sync=['results/', 'models/'],
+                        server_password=FLAGS.server_password,
+                        dry_run=FLAGS.dry_run)
+
+  # Load dataset once for all experiments from top level configs. Or...
+  if FLAGS.consistent_dataset:
+    dataset = experiment.InitDataset(EC.config)
+
+  logging.info("%s experiments in config." % len(EC.configs))
+  while EC.MoreExperiments():
+
+    h = EC.GetExperiment()
+    if h:
+      try:
+        # ...Or use dataset configs with distinct hyperparams for each experiment.
+        # can add randomization/data augmentation to a single loaded dataset in run_one as well
+        if not FLAGS.consistent_dataset:
+          dataset = experiment.InitDataset(h['hyperparameters'])
+
+        mt = Tracker(['train', 'val'], exp_info=h)
+        model = experiment.CreateModel(h['hyperparameters'])
+
+        ckpt = h['hyperparameters'].get('model_checkpoint', None)
+        if ckpt:
+          experiment.LoadCheckpoint(model, ckpt)
+
+        model = experiment.RunOne(h['hyperparameters'], model, dataset, mt)
+        EC.SaveResults(mt.GetMetrics(), h['experiment_hash'])
         if save_models:
-          EC.SaveModel(h, model)
+          EC.SaveModel(experiment.SaveModel, model, h['experiment_hash'])
         del model
         torch.cuda.empty_cache()
       except Exception as e:
         logging.warning('Failed to run or save exp %s due to %s\n%s' % (
           h['experiment_hash'], e, h))
-        EC.MarkIncomplete(h)
+        EC.MarkIncomplete(h['experiment_hash'])
         if FLAGS.raise_on_failure:
           raise
       except KeyboardInterrupt:
@@ -120,7 +282,10 @@ def main(argv):
   os.environ['SERVER_ADDR']=FLAGS.address
 
   DownloadExpSetup(FLAGS.download_data, FLAGS.download_scripts)
-  RunExperiment(FLAGS.save_models)
+  if FLAGS.eval_only:
+    Evaluate()
+  else:
+    RunExperiment(FLAGS.save_models)
 
 if __name__ == '__main__':
    app.run(main)

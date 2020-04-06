@@ -116,9 +116,8 @@ class FileSyncer():
       logging.info("Syncing %s" % f)      
       self.http_client.PutFile(f)
 
-
 class ExperimentClient():
-  def __init__(self, address, dirs_to_sync=[], server_password="very_secure", dry_run=False):
+  def __init__(self, address, config='config.yaml', dirs_to_sync=[], server_password="very_secure", dry_run=False):
     self.holding_lock = False
     self.dry_run=dry_run
     for d in dirs_to_sync:
@@ -128,12 +127,12 @@ class ExperimentClient():
     self.http_client = HttpClient(address, server_password, dry_run=dry_run)
     self.file_syncer = FileSyncer(self.http_client, dirs_to_sync)
     self.file_syncer.SyncMissingFiles()
-    config_file = 'config.yaml'
-    assert self.http_client.GetFile(config_file), "could not get config file for experiment"
+    self.config_file = config
+    assert self.http_client.GetFile(self.config_file), "could not get config file for experiment"
 
 
 
-    self.config = self.LoadConfig(config_file)
+    self.config = self.LoadConfig(self.config_file)
     self.configs = self.InitializeExperiments()
 
     self.n_experiments_left = len(self.configs)
@@ -242,30 +241,28 @@ class ExperimentClient():
   def MoreExperiments(self):
     return self.n_experiments_left >= 1
 
-  def SaveResults(self, h, results):
-    filename = os.path.join(RESULTS_DIR, h['experiment_hash'])
-    if not os.path.exists(filename):
+  def SaveResults(self, results, experiment_hash, overwrite=False):
+    filename = os.path.join(RESULTS_DIR, experiment_hash)
+    if not os.path.exists(filename) or overwrite:
       if not self.dry_run:
         with open(filename, 'x') as f:
-          out = {'results': results,
-                 'exp_info': h}
-          f.write(dump(out))
+          f.write(dump(results))
     else:
       logging.warning("Tried overwriting existing result")
     self.file_syncer.SyncMissingFiles()
 
-  def SaveModel(self, h, model):
-    filename = os.path.join(MODEL_DIR, h['experiment_hash'])
+  def SaveModel(self, save_fn, model, experiment_hash):
+    filename = os.path.join(MODEL_DIR, experiment_hash)
     if os.path.exists(filename):
       logging.warning("saved model already exists.")
       filename+='.new'
     if not self.dry_run:
-      torch.save(model.state_dict(), filename)
+      save_fn(model, filename)
     self.file_syncer.SyncMissingFiles()
 
-  def MarkIncomplete(self, h):
+  def MarkIncomplete(self, experiment_hash):
     if not self.dry_run:
-      self.http_client.DeleteFile(os.path.join(STARTED_DIR, h['experiment_hash']))
+      self.http_client.DeleteFile(os.path.join(STARTED_DIR, experiment_hash))
 
 def _TestExperiment(hash_exp):
   for i in range(10):
