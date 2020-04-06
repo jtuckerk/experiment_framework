@@ -43,8 +43,6 @@ flags.DEFINE_boolean('raise_on_failure', help='Raise the exception from a failin
                      default=True)
 flags.DEFINE_boolean('consistent_dataset', help='If true init dataset once for all experiments, else re-init for each exp.',
                      default=True)
-flags.DEFINE_boolean('eval_only', help='kludgy way to run evaluation on an already trained model.',
-                     default=False)
 
 
 def DownloadExpSetup(download_data, download_scripts):
@@ -151,70 +149,6 @@ class Tracker():
   def GetMetrics(self):
     return {t: dict(v) for t,v in self.tracked_types.items()}
       
-
-def Evaluate():
-  # use the hyperparameters stored in the results dir and the model checkpoint in the models dir.
-  # TODO more code organization would probably be good.
-  from experiment_client import ExperimentClient
-  # Contrived example of generating a module named as a string
-  experiment_module = FLAGS.experiment
-  experiment = importlib.import_module(experiment_module)
-
-
-  EC = ExperimentClient(
-    os.environ['SERVER_ADDR'],
-    config=FLAGS.config,
-    dirs_to_sync=['results/', 'models/'],
-    server_password=FLAGS.server_password,
-    dry_run=FLAGS.dry_run)
-
-  # Load dataset once for all experiments from top level configs. Or...
-  if FLAGS.consistent_dataset:
-    dataset = experiment.InitDataset(EC.config)
-
-  logging.info("%s experiments in config." % len(EC.configs))
-  while EC.MoreExperiments():
-
-    h = EC.GetExperiment()
-    if h:
-      try:
-        # ...Or use dataset configs with distinct hyperparams for each experiment.
-        # can add randomization/data augmentation to a single loaded dataset in run_one as well
-        if not FLAGS.consistent_dataset:
-          dataset = experiment.InitDataset(h['hyperparameters'])
-
-        ckpt = h['hyperparameters'].get('model_checkpoint', None)
-        results_file = 'results/' + ckpt.split('/')[-1]
-        loaded_results = yaml.safe_load(open(results_file).read())
-        mt = Tracker(['val'], exp_info=None)
-        mt.PopulateData(loaded_results)
-
-        # keep the hyperparams from the experiment but overwrite any hyperparams in the eval config.
-        # This right here is sommme reallll good code
-        h_load = deepcopy(mt.tracked_types['exp_info'])
-        h_load['hyperparameters'].update(h['hyperparameters'])
-        h = h_load
-        h['hyperparameters']['epochs'] = 0
-        
-        model = experiment.CreateModel(h['hyperparameters'])
-
-        if ckpt:
-          experiment.LoadCheckpoint(model, ckpt)
-        model = experiment.RunOne(h['hyperparameters'], model, dataset, mt)
-        EC.SaveResults(mt.GetMetrics(), h['experiment_hash']+".eval", overwrite=True)
-
-        experiment.CleanupExperiment(model)
-      except Exception as e:
-        logging.warning('Failed to run or save exp %s due to %s\n%s' % (
-          h['experiment_hash'], e, h))
-        EC.MarkIncomplete(h['experiment_hash'])
-        if FLAGS.raise_on_failure:
-          raise
-      except KeyboardInterrupt:
-        logging.warning('Exited experiment  %s\n%s' % (
-          h['experiment_hash'], h))
-        EC.MarkIncomplete(h)
-        raise
   
 def RunExperiment(save_models):
   from experiment_client import ExperimentClient
@@ -282,10 +216,7 @@ def main(argv):
   os.environ['SERVER_ADDR']=FLAGS.address
 
   DownloadExpSetup(FLAGS.download_data, FLAGS.download_scripts)
-  if FLAGS.eval_only:
-    Evaluate()
-  else:
-    RunExperiment(FLAGS.save_models)
+  RunExperiment(FLAGS.save_models)
 
 if __name__ == '__main__':
    app.run(main)

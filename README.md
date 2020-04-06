@@ -16,16 +16,16 @@ A single machine (usually my laptop) runs the server from an experiment director
 ### User defined components
 
 * experiment.py
-  * Defines ```init_dataset``` and ```run_one``` which each take a set of hyperparameters from the ExperimentClient.
+  * Defines `InitDataset`, `CreateModel`, `LoadCheckpoint`, `RunOne`, `SaveModel`, and `CleanupExperiment` which should agree with the calls to them in the ExperimentClient.
 * data.zip
-  * Any files needed by the ```init_dataset``` function in experiment.py
+  * Any files needed by the `InitDataset` function in experiment.py
 * scripts.zip
   * experiment_client.py
   * experiment.py
 
 
 ### Usage
-Run the file server in your experiment directory:
+Run the experiment/file server in your experiment directory:
 
 ```
 ./file_server.py --port=8030
@@ -42,6 +42,7 @@ python ./experiment_runner.py \
   --server_password="very_secure";
 ```
 
+The experiment client handles running unique experiments on each machine and tracks which experiments have already been completed.<br>
 See ```experiment.py``` for an example of an experiment and ```config.yaml``` for an experiment config example.
 
 ### Example config
