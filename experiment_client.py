@@ -243,6 +243,8 @@ class ExperimentClient():
 
   def SaveResults(self, results, experiment_hash, overwrite=False):
     filename = os.path.join(RESULTS_DIR, experiment_hash)
+    if os.path.exists(filename) and not overwrite:
+      filename += ".new"
     if not os.path.exists(filename) or overwrite:
       if not self.dry_run:
         with open(filename, 'x') as f:
@@ -263,6 +265,8 @@ class ExperimentClient():
   def MarkIncomplete(self, experiment_hash):
     if not self.dry_run:
       self.http_client.DeleteFile(os.path.join(STARTED_DIR, experiment_hash))
+      logging.info('Marking %s incomplete' % experiment_hash)
+
 
 def _TestExperiment(hash_exp):
   for i in range(10):

@@ -23,6 +23,7 @@ from copy import deepcopy
 import importlib
 import yaml
 from collections import defaultdict
+from datetime import datetime
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string('config', help='Config file name', default='config.yaml')
@@ -158,6 +159,7 @@ def RunExperiment(save_models):
 
 
   EC = ExperimentClient(os.environ['SERVER_ADDR'],
+                        FLAGS.config,
                         dirs_to_sync=['results/', 'models/'],
                         server_password=FLAGS.server_password,
                         dry_run=FLAGS.dry_run)
@@ -185,6 +187,8 @@ def RunExperiment(save_models):
           experiment.LoadCheckpoint(model, ckpt)
 
         model = experiment.RunOne(h['hyperparameters'], model, dataset, mt)
+        finish_timestamp = str(datetime.now())
+        mt.AddExpInfo('finished_date', finish_timestamp)
         EC.SaveResults(mt.GetMetrics(), h['experiment_hash'])
         if save_models:
           EC.SaveModel(experiment.SaveModel, model, h['experiment_hash'])
@@ -199,7 +203,7 @@ def RunExperiment(save_models):
       except KeyboardInterrupt:
         logging.warning('Exited experiment  %s\n%s' % (
           h['experiment_hash'], h))
-        EC.MarkIncomplete(h)
+        EC.MarkIncomplete(h['experiment_hash'])
         raise
 
 
